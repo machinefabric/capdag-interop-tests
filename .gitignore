@@ -125,7 +125,7 @@ flame.svg
 
 standard/*
 standard/media/*
-.ws/
+.wsb/
 diffs/
 
 .DS_Store
@@ -200,7 +200,7 @@ fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
 
-.ws/
+.wsb/
 
 # Typical Go project .gitignore
 
@@ -255,7 +255,7 @@ temp/
 # Generated files (optional)
 # *.pb.go
 # bindata.go
-.ws/
+.wsb/
 .scrap/
 src/capns_interop/plugins/go/capns-interop-plugin-go
 src/capns_interop/plugins/go/interop-test-plugin

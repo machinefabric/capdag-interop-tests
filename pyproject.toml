@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "capns-interop-tests"
-version = "0.82.28128"
+version = "0.83.28134"
 description = "Interoperability testing framework for capns implementations"
 requires-python = ">=3.10"
 dependencies = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
     "pytest-timeout>=2.1.0",
-    "capns>=0.76.30315",
-    "tagged-urn>=0.10.2952",
+    "capns>=0.77.30363",
+    "tagged-urn>=0.11.2980",
 ]
 
 [tool.setuptools.packages.find]
