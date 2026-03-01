@@ -1,17 +1,13 @@
-.PHONY: all plugins hosts relay-hosts routers build-rust build-python build-swift build-go \
-       build-rust-host build-python-host build-swift-host build-go-host \
+.PHONY: all plugins relay-hosts routers build-rust build-python build-swift build-go \
        build-rust-relay-host build-python-relay-host build-swift-relay-host build-go-relay-host \
-       build-rust-router build-python-router build-swift-router build-go-router \
+       build-rust-router build-swift-router \
        clean test test-matrix test-quick test-throughput test-relay test-multi-host
 
 # Build everything
-all: plugins hosts relay-hosts routers
+all: plugins relay-hosts routers
 
 # Build all plugins
 plugins: build-rust build-python build-swift build-go
-
-# Build all hosts
-hosts: build-rust-host build-python-host build-swift-host build-go-host
 
 # Build all relay hosts
 relay-hosts: build-rust-relay-host build-python-relay-host build-swift-relay-host build-go-relay-host
@@ -44,30 +40,6 @@ build-go:
 	cd src/capns_interop/plugins/go && go build -o capns-interop-plugin-go .
 	mkdir -p artifacts/build/go
 	cp src/capns_interop/plugins/go/capns-interop-plugin-go artifacts/build/go/
-
-# --- Hosts ---
-
-build-rust-host:
-	@echo "Building Rust host..."
-	cd src/capns_interop/hosts/rust && cargo build --release
-	mkdir -p artifacts/build/rust-host
-	cp src/capns_interop/hosts/rust/target/release/capns-interop-host-rust artifacts/build/rust-host/
-
-build-python-host:
-	@echo "Preparing Python host..."
-	@# Python host runs from source — no build needed
-
-build-swift-host:
-	@echo "Building Swift host..."
-	cd src/capns_interop/hosts/swift && swift build -c release
-	mkdir -p artifacts/build/swift-host
-	cp src/capns_interop/hosts/swift/.build/release/capns-interop-host-swift artifacts/build/swift-host/
-
-build-go-host:
-	@echo "Building Go host..."
-	cd src/capns_interop/hosts/go && go build -o capns-interop-host-go .
-	mkdir -p artifacts/build/go-host
-	cp src/capns_interop/hosts/go/capns-interop-host-go artifacts/build/go-host/
 
 # --- Relay Hosts ---
 
@@ -126,12 +98,12 @@ clean:
 	rm -rf artifacts/
 	cd src/capns_interop/plugins/rust && cargo clean || true
 	cd src/capns_interop/plugins/swift && swift package clean || true
-	cd src/capns_interop/hosts/rust && cargo clean || true
-	cd src/capns_interop/hosts/swift && swift package clean || true
+	cd src/capns_interop/hosts/rust-relay && cargo clean || true
+	cd src/capns_interop/hosts/swift-relay && swift package clean || true
 	cd src/capns_interop/routers/rust && cargo clean || true
 	cd src/capns_interop/routers/swift && swift package clean || true
 	rm -f src/capns_interop/plugins/go/capns-interop-plugin-go
-	rm -f src/capns_interop/hosts/go/capns-interop-host-go
+	rm -f src/capns_interop/hosts/go-relay/capns-interop-relay-host-go
 
 # --- Test targets ---
 

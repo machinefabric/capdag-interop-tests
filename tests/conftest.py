@@ -286,68 +286,6 @@ def plugin_binaries(project_root, request):
     return binaries
 
 
-@pytest.fixture(scope="session")
-def host_binaries(project_root, request):
-    """Return paths to built test host binaries, auto-building if needed."""
-    clear_cache = request.config.getoption("--clear")
-    artifacts = project_root / "artifacts" / "build"
-    hosts_src = project_root / "src" / "capns_interop" / "hosts"
-    capns_src = project_root.parent / "capns" / "src"  # capns library dependency
-
-    # HARD CHECK: capns library dependency path must exist for Rust builds
-    if not capns_src.exists():
-        raise RuntimeError(
-            f"capns library dependency not found at: {capns_src}\n"
-            f"Expected structure: filegrind/capns/src and filegrind/capns-interop-tests/"
-        )
-
-    binaries = {
-        "rust": artifacts / "rust-host" / "capns-interop-host-rust",
-        "python": hosts_src / "python" / "host.py",
-        "swift": artifacts / "swift-host" / "capns-interop-host-swift",
-        "go": artifacts / "go-host" / "capns-interop-host-go",
-    }
-
-    targets = {
-        "rust": ("build-rust-host", hosts_src / "rust", [capns_src]),
-        "swift": ("build-swift-host", hosts_src / "swift", None),
-        "go": ("build-go-host", hosts_src / "go", None),
-    }
-
-    # Clear cached binaries if --clear option is set
-    if clear_cache:
-        print("\n--clear: Removing cached host binaries...")
-        for lang, binary_path in binaries.items():
-            if lang in targets:  # Only clear binaries that have build targets
-                _clear_binary(binary_path)
-
-    for lang, (target, source_dir, extra_deps) in targets.items():
-        binary_path = binaries[lang]
-        old_mtime = binary_path.stat().st_mtime if binary_path.exists() else 0
-
-        if _needs_build(binary_path, source_dir, extra_deps, force=clear_cache):
-            print(f"\nAuto-building {lang} host...")
-            _run_make(project_root, target)
-
-            # HARD CHECK: Binary must exist after build
-            if not binary_path.exists():
-                raise RuntimeError(
-                    f"Build succeeded but binary not found at: {binary_path}\n"
-                    f"make {target} completed but failed to create/copy the binary"
-                )
-
-            # HARD CHECK: Binary timestamp must have been updated
-            new_mtime = binary_path.stat().st_mtime
-            if new_mtime <= old_mtime:
-                raise RuntimeError(
-                    f"Build succeeded but binary was not updated: {binary_path}\n"
-                    f"Old mtime: {old_mtime}, New mtime: {new_mtime}\n"
-                    f"This suggests the build didn't actually recompile or the copy failed"
-                )
-
-    return binaries
-
-
 def _print_throughput_matrix(results: dict):
     """Print throughput matrix table to stdout."""
     langs = ["rust", "go", "python", "swift"]
