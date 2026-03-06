@@ -22,6 +22,7 @@ use capdag::bifaci::host_runtime::PluginHostRuntime;
 use capdag::bifaci::frame::Limits;
 use capdag::bifaci::io::{FrameReader, FrameWriter};
 use capdag::bifaci::relay::RelaySlave;
+use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
 
 #[derive(Debug)]
 struct Args {
@@ -86,21 +87,6 @@ fn spawn_plugin(plugin_path: &str) -> (std::process::ChildStdout, std::process::
     (stdout, stdin, child)
 }
 
-fn create_pipe() -> (std::fs::File, std::fs::File) {
-    let mut fds = [0i32; 2];
-    let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if ret != 0 {
-        eprintln!("pipe() failed");
-        std::process::exit(1);
-    }
-    unsafe {
-        (
-            std::fs::File::from_raw_fd(fds[0]),
-            std::fs::File::from_raw_fd(fds[1]),
-        )
-    }
-}
-
 #[tokio::main]
 async fn main() {
     let args = parse_args();
@@ -158,54 +144,49 @@ async fn run_direct(mut host: PluginHostRuntime) {
 }
 
 async fn run_with_relay(mut host: PluginHostRuntime) {
-    // Create pipe pairs for slave ↔ host communication
-    // Pipe A: slave writes → host reads
-    let (a_read, a_write) = create_pipe();
-    // Pipe B: host writes → slave reads
-    let (b_read, b_write) = create_pipe();
+    // Use tokio UnixStream pairs for slave ↔ host communication
+    let (host_socket, slave_socket) = tokio::net::UnixStream::pair()
+        .expect("Failed to create UnixStream pair");
 
-    // Run host in a tokio task with async pipe ends
-    let host_relay_read = tokio::fs::File::from_std(a_read);
-    let host_relay_write = tokio::fs::File::from_std(b_write);
+    // Split sockets for bidirectional async I/O
+    let (host_read, host_write) = host_socket.into_split();
+    let (slave_local_read, slave_local_write) = slave_socket.into_split();
 
+    // Run host in a tokio task
     let host_handle = tokio::spawn(async move {
-        host.run(host_relay_read, host_relay_write, || Vec::new()).await
+        host.run(host_read, host_write, || Vec::new()).await
     });
 
-    // Run slave in a blocking thread with sync pipe ends + owned stdin/stdout.
-    // Use raw fd to get owned File handles (stdin.lock() is not Send).
-    let stdin_file = unsafe { std::fs::File::from_raw_fd(0) };
-    let stdout_file = unsafe { std::fs::File::from_raw_fd(1) };
+    // Convert stdin/stdout to async
+    let stdin = tokio::io::stdin();
+    let stdout = tokio::io::stdout();
 
-    let slave_handle = tokio::task::spawn_blocking(move || {
-        let slave = RelaySlave::new(b_read, a_write);
+    // Run slave in async task
+    let slave = RelaySlave::new(slave_local_read, slave_local_write);
+    let socket_reader = FrameReader::new(BufReader::new(stdin));
+    let socket_writer = FrameWriter::new(BufWriter::new(stdout));
 
-        let socket_reader = FrameReader::new(std::io::BufReader::new(stdin_file));
-        let socket_writer = FrameWriter::new(std::io::BufWriter::new(stdout_file));
+    // Send initial RelayNotify with CAP_IDENTITY (always available).
+    // PluginHostRuntime will send updated RelayNotify after plugins connect.
+    let initial_caps = vec![capdag::standard::caps::CAP_IDENTITY.to_string()];
+    let initial_caps_json = serde_json::to_vec(&initial_caps)
+        .expect("Failed to serialize initial caps array");
+    eprintln!("[RelayHost] Initial RelayNotify payload: {} bytes: {:?}",
+              initial_caps_json.len(),
+              std::str::from_utf8(&initial_caps_json).unwrap_or("<invalid UTF-8>"));
+    let limits = Limits::default();
 
-        // Send initial RelayNotify with CAP_IDENTITY (always available).
-        // PluginHostRuntime will send updated RelayNotify after plugins connect.
-        let initial_caps = vec![capdag::standard::caps::CAP_IDENTITY.to_string()];
-        let initial_caps_json = serde_json::to_vec(&initial_caps)
-            .expect("Failed to serialize initial caps array");
-        eprintln!("[RelayHost] Initial RelayNotify payload: {} bytes: {:?}",
-                  initial_caps_json.len(),
-                  std::str::from_utf8(&initial_caps_json).unwrap_or("<invalid UTF-8>"));
-        let limits = Limits::default();
-        let result = slave.run(
-            socket_reader,
-            socket_writer,
-            Some((&initial_caps_json, &limits)),
-        );
+    let slave_result = slave.run(
+        socket_reader,
+        socket_writer,
+        Some((&initial_caps_json, &limits)),
+    ).await;
 
-        if let Err(e) = result {
-            eprintln!("RelaySlave.run error: {}", e);
-        }
-    });
+    if let Err(e) = slave_result {
+        eprintln!("RelaySlave.run error: {}", e);
+    }
 
-    // Wait for slave to finish (master closed connection)
-    let _ = slave_handle.await;
-    // Abort host (slave pipes are closed, host should exit)
+    // Abort host (slave finished, host should exit)
     host_handle.abort();
     let _ = host_handle.await;
 }
@@ -214,7 +195,7 @@ async fn run_with_relay_socket(mut host: PluginHostRuntime, socket_path: &str) {
     // Remove existing socket if it exists
     let _ = std::fs::remove_file(socket_path);
 
-    // Create Unix socket listener
+    // Create Unix socket listener (std, then convert to tokio)
     let listener = UnixListener::bind(socket_path).unwrap_or_else(|e| {
         eprintln!("Failed to bind socket {}: {}", socket_path, e);
         std::process::exit(1);
@@ -222,66 +203,63 @@ async fn run_with_relay_socket(mut host: PluginHostRuntime, socket_path: &str) {
 
     eprintln!("[RelayHost] Listening on socket: {}", socket_path);
 
+    // Convert to tokio listener
+    listener.set_nonblocking(true).expect("Failed to set non-blocking");
+    let tokio_listener = tokio::net::UnixListener::from_std(listener)
+        .expect("Failed to convert to tokio UnixListener");
+
     // Accept ONE connection from router
-    let (socket, _addr) = listener.accept().unwrap_or_else(|e| {
+    let (socket, _addr) = tokio_listener.accept().await.unwrap_or_else(|e| {
         eprintln!("Failed to accept connection: {}", e);
         std::process::exit(1);
     });
 
     eprintln!("[RelayHost] Router connected");
 
-    // Create pipe pairs for slave ↔ host communication
-    // Pipe A: slave writes → host reads
-    let (a_read, a_write) = create_pipe();
-    // Pipe B: host writes → slave reads
-    let (b_read, b_write) = create_pipe();
+    // Use tokio UnixStream pairs for slave ↔ host communication
+    let (host_socket, slave_socket) = tokio::net::UnixStream::pair()
+        .expect("Failed to create UnixStream pair");
 
-    // Run host in a tokio task with async pipe ends
-    let host_relay_read = tokio::fs::File::from_std(a_read);
-    let host_relay_write = tokio::fs::File::from_std(b_write);
+    // Split sockets for bidirectional async I/O
+    let (host_read, host_write) = host_socket.into_split();
+    let (slave_local_read, slave_local_write) = slave_socket.into_split();
 
+    // Run host in a tokio task
     let host_handle = tokio::spawn(async move {
-        host.run(host_relay_read, host_relay_write, || Vec::new()).await
+        host.run(host_read, host_write, || Vec::new()).await
     });
 
-    // Clone socket for bidirectional communication
-    let socket_read = socket.try_clone().unwrap_or_else(|e| {
-        eprintln!("Failed to clone socket: {}", e);
-        std::process::exit(1);
-    });
+    // Split the incoming socket for bidirectional I/O
+    let (socket_read, socket_write) = socket.into_split();
 
-    // Run slave in a blocking thread with sync pipe ends + socket
-    let slave_handle = tokio::task::spawn_blocking(move || {
-        let slave = RelaySlave::new(b_read, a_write);
+    // Run slave in async task
+    let slave = RelaySlave::new(slave_local_read, slave_local_write);
+    let socket_reader = FrameReader::new(BufReader::new(socket_read));
+    let socket_writer = FrameWriter::new(BufWriter::new(socket_write));
 
-        let socket_reader = FrameReader::new(std::io::BufReader::new(socket_read));
-        let socket_writer = FrameWriter::new(std::io::BufWriter::new(socket));
+    // Send initial RelayNotify with CAP_IDENTITY (always available).
+    // PluginHostRuntime will send updated RelayNotify after plugins connect.
+    let initial_caps = vec![capdag::standard::caps::CAP_IDENTITY.to_string()];
+    let initial_caps_json = serde_json::to_vec(&initial_caps)
+        .expect("Failed to serialize initial caps array");
+    eprintln!("[RelayHost] Initial RelayNotify payload: {} bytes: {:?}",
+              initial_caps_json.len(),
+              std::str::from_utf8(&initial_caps_json).unwrap_or("<invalid UTF-8>"));
+    let limits = Limits::default();
 
-        // Send initial RelayNotify with CAP_IDENTITY (always available).
-        // PluginHostRuntime will send updated RelayNotify after plugins connect.
-        let initial_caps = vec![capdag::standard::caps::CAP_IDENTITY.to_string()];
-        let initial_caps_json = serde_json::to_vec(&initial_caps)
-            .expect("Failed to serialize initial caps array");
-        eprintln!("[RelayHost] Initial RelayNotify payload: {} bytes: {:?}",
-                  initial_caps_json.len(),
-                  std::str::from_utf8(&initial_caps_json).unwrap_or("<invalid UTF-8>"));
-        let limits = Limits::default();
-        let result = slave.run(
-            socket_reader,
-            socket_writer,
-            Some((&initial_caps_json, &limits)),
-        );
+    let slave_result = slave.run(
+        socket_reader,
+        socket_writer,
+        Some((&initial_caps_json, &limits)),
+    ).await;
 
-        if let Err(e) = result {
-            eprintln!("RelaySlave.run error: {}", e);
-        }
+    if let Err(e) = slave_result {
+        eprintln!("RelaySlave.run error: {}", e);
+    }
 
-        eprintln!("[RelayHost] Slave finished, router disconnected");
-    });
+    eprintln!("[RelayHost] Slave finished, router disconnected");
 
-    // Wait for slave to finish (router closed connection)
-    let _ = slave_handle.await;
-    // Abort host (slave pipes are closed, host should exit)
+    // Abort host (slave finished, host should exit)
     host_handle.abort();
     let _ = host_handle.await;
 

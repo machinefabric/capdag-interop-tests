@@ -6,11 +6,11 @@
 ///
 /// Usage:
 ///   capdag-interop-router-rust --connect <socket-path> [--connect <another-socket>]
-use std::os::unix::net::UnixStream;
-
 use capdag::bifaci::frame::SeqAssigner;
 use capdag::bifaci::io::{FrameReader, FrameWriter};
 use capdag::bifaci::relay_switch::RelaySwitch;
+use tokio::io::{BufReader, BufWriter};
+use tokio::net::UnixStream;
 
 #[derive(Debug)]
 struct Args {
@@ -41,27 +41,21 @@ fn parse_args() -> Args {
     args
 }
 
-fn connect_to_host(socket_path: &str) -> (UnixStream, UnixStream) {
+async fn connect_to_host(socket_path: &str) -> UnixStream {
     eprintln!("[Router] Connecting to relay host at: {}", socket_path);
 
     // Connect to the relay host's listening socket
-    let stream = UnixStream::connect(socket_path).unwrap_or_else(|e| {
+    let stream = UnixStream::connect(socket_path).await.unwrap_or_else(|e| {
         eprintln!("ERROR: Failed to connect to {}: {}", socket_path, e);
         std::process::exit(1);
     });
 
-    // Clone the stream for bidirectional communication
-    // Router reads from one handle, writes to the other
-    let read_stream = stream.try_clone().unwrap_or_else(|e| {
-        eprintln!("ERROR: Failed to clone socket: {}", e);
-        std::process::exit(1);
-    });
-
     eprintln!("[Router] Connected to relay host at {}", socket_path);
-    (read_stream, stream)
+    stream
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = parse_args();
 
     if args.socket_paths.is_empty() {
@@ -70,16 +64,16 @@ fn main() {
     }
 
     // Connect to all relay host sockets
-    let mut socket_pairs: Vec<(UnixStream, UnixStream)> = Vec::new();
+    let mut sockets: Vec<UnixStream> = Vec::new();
 
     for socket_path in &args.socket_paths {
-        let (read, write) = connect_to_host(socket_path);
-        socket_pairs.push((read, write));
+        let stream = connect_to_host(socket_path).await;
+        sockets.push(stream);
     }
 
     // Create RelaySwitch with all host connections
-    eprintln!("[Router] Creating RelaySwitch with {} host(s)", socket_pairs.len());
-    let mut switch = RelaySwitch::new(socket_pairs).unwrap_or_else(|e| {
+    eprintln!("[Router] Creating RelaySwitch with {} host(s)", sockets.len());
+    let mut switch = RelaySwitch::new(sockets).await.unwrap_or_else(|e| {
         eprintln!("Failed to create RelaySwitch: {}", e);
         std::process::exit(1);
     });
@@ -90,43 +84,35 @@ fn main() {
     // The full capabilities from hosts were consumed during identity verification
     // in RelaySwitch::new(), so the engine hasn't seen them yet.
     {
-        let stdout = std::io::stdout();
-        let mut init_writer = FrameWriter::new(std::io::BufWriter::new(stdout.lock()));
+        let stdout = tokio::io::stdout();
+        let mut init_writer = FrameWriter::new(BufWriter::new(stdout));
         let notify = capdag::bifaci::frame::Frame::relay_notify(
             switch.capabilities(),
             switch.limits(),
         );
-        init_writer.write(&notify).unwrap_or_else(|e| {
+        init_writer.write(&notify).await.unwrap_or_else(|e| {
             eprintln!("Failed to write initial RelayNotify to engine: {}", e);
             std::process::exit(1);
         });
         eprintln!("[Router] Sent initial RelayNotify to engine ({} bytes)", switch.capabilities().len());
     }
 
-    // Router is a pure multiplexer - two independent loops:
-    //   - Thread 1: stdin → channel (continuously read stdin, send frames to channel)
-    //   - Thread 2 (main): channel + RelaySwitch → stdout (multiplex stdin frames and master frames)
-    //
-    // No coupling between them! Frames flow independently in both directions.
-    //
-    // Architecture:
-    //   - stdin thread sends frames to stdin_tx channel
-    //   - main thread owns RelaySwitch (no mutex needed!)
-    //   - main thread multiplexes: stdin_rx (non-blocking) and switch.read_from_masters() (blocking)
+    // Router is a pure multiplexer - two independent tasks:
+    //   - Task 1: stdin → channel (continuously read stdin, send frames to channel)
+    //   - Task 2 (main): channel + RelaySwitch → stdout (multiplex stdin frames and master frames)
 
-    use std::sync::mpsc;
-    use std::thread;
+    use tokio::sync::mpsc;
 
-    let (stdin_tx, stdin_rx) = mpsc::channel();
+    let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel();
 
-    // Thread 1: stdin → channel
-    thread::spawn(move || {
-        let stdin = std::io::stdin();
-        let mut reader = FrameReader::new(std::io::BufReader::new(stdin.lock()));
+    // Task 1: stdin → channel
+    tokio::spawn(async move {
+        let stdin = tokio::io::stdin();
+        let mut reader = FrameReader::new(BufReader::new(stdin));
 
         eprintln!("[Router/stdin] Starting stdin reader loop");
         loop {
-            match reader.read() {
+            match reader.read().await {
                 Ok(Some(frame)) => {
                     eprintln!("[Router/stdin] Read frame: {:?} (id={:?})", frame.frame_type, frame.id);
                     if stdin_tx.send(frame).is_err() {
@@ -146,69 +132,70 @@ fn main() {
         }
     });
 
-    // Main thread: multiplex stdin_rx and RelaySwitch
-    let stdout = std::io::stdout();
-    let mut writer = FrameWriter::new(std::io::BufWriter::new(stdout.lock()));
+    // Main task: multiplex stdin_rx and RelaySwitch
+    let stdout = tokio::io::stdout();
+    let mut writer = FrameWriter::new(BufWriter::new(stdout));
     let mut stdout_seq = SeqAssigner::new();
 
     eprintln!("[Router/main] Starting main multiplexer loop");
 
-    // Main loop: balanced interleaving of stdin and master frames
-    // Process one stdin frame, then one master frame (with timeout), repeat
+    // Main loop: use tokio::select! for concurrent stdin and master frame reading
     loop {
-        // Try to read ONE stdin frame (non-blocking)
-        match stdin_rx.try_recv() {
-            Ok(frame) => {
-                eprintln!("[Router/main] Sending stdin frame to master: {:?} (id={:?})", frame.frame_type, frame.id);
-                let frame_id = frame.id.clone();
-                let is_req = frame.frame_type == capdag::bifaci::frame::FrameType::Req;
-                if let Err(e) = switch.send_to_master(frame, None) {
-                    eprintln!("[Router/main] Error sending to master: {}", e);
-                    // On REQ failure, send ERR back to engine so it doesn't hang
-                    if is_req {
-                        let err_frame = capdag::bifaci::frame::Frame::err(frame_id, "NO_HANDLER", &e.to_string());
-                        if let Err(write_err) = writer.write(&err_frame) {
-                            eprintln!("[Router/main] Failed to write ERR frame: {}", write_err);
+        tokio::select! {
+            // Try to read from stdin channel
+            frame_opt = stdin_rx.recv() => {
+                match frame_opt {
+                    Some(frame) => {
+                        eprintln!("[Router/main] Sending stdin frame to master: {:?} (id={:?})", frame.frame_type, frame.id);
+                        let frame_id = frame.id.clone();
+                        let is_req = frame.frame_type == capdag::bifaci::frame::FrameType::Req;
+                        if let Err(e) = switch.send_to_master(frame, None).await {
+                            eprintln!("[Router/main] Error sending to master: {}", e);
+                            // On REQ failure, send ERR back to engine so it doesn't hang
+                            if is_req {
+                                let mut err_frame = capdag::bifaci::frame::Frame::err(frame_id, "NO_HANDLER", &e.to_string());
+                                stdout_seq.assign(&mut err_frame);
+                                if let Err(write_err) = writer.write(&err_frame).await {
+                                    eprintln!("[Router/main] Failed to write ERR frame: {}", write_err);
+                                }
+                            }
                         }
+                    }
+                    None => {
+                        eprintln!("[Router/main] stdin channel closed, shutting down");
+                        break;
                     }
                 }
             }
-            Err(mpsc::TryRecvError::Empty) => {
-                // No stdin frame available right now, that's OK
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                eprintln!("[Router/main] stdin channel closed, shutting down");
-                break;
-            }
-        }
 
-        // Try to read ONE master frame (with timeout to avoid blocking forever)
-        // Use a short timeout so we can quickly check stdin again
-        use std::time::Duration;
-        match switch.read_from_masters_timeout(Duration::from_millis(10)) {
-            Ok(Some(mut frame)) => {
-                eprintln!("[Router/main] Received from master: {:?} (id={:?}, seq={}, payload_len={})",
-                    frame.frame_type, frame.id, frame.seq,
-                    frame.payload.as_ref().map_or(0, |p| p.len()));
-                stdout_seq.assign(&mut frame);
-                let encoded_size = capdag::bifaci::io::encode_frame(&frame).map(|b| b.len()).unwrap_or(0);
-                eprintln!("[Router/main] Writing frame to stdout: {:?} encoded_size={}", frame.frame_type, encoded_size);
-                if let Err(e) = writer.write(&frame) {
-                    eprintln!("[Router/main] Error writing to stdout: {}", e);
-                    break;
+            // Try to read from masters via pump_one
+            pump_result = switch.pump_one() => {
+                match pump_result {
+                    Ok(Some(mut frame)) => {
+                        eprintln!("[Router/main] Received from master: {:?} (id={:?}, seq={}, payload_len={})",
+                            frame.frame_type, frame.id, frame.seq,
+                            frame.payload.as_ref().map_or(0, |p| p.len()));
+                        stdout_seq.assign(&mut frame);
+                        let encoded_size = capdag::bifaci::io::encode_frame(&frame).map(|b| b.len()).unwrap_or(0);
+                        eprintln!("[Router/main] Writing frame to stdout: {:?} encoded_size={}", frame.frame_type, encoded_size);
+                        if let Err(e) = writer.write(&frame).await {
+                            eprintln!("[Router/main] Error writing to stdout: {}", e);
+                            break;
+                        }
+                        eprintln!("[Router/main] Frame written successfully: {:?}", frame.frame_type);
+                        if matches!(frame.frame_type, capdag::bifaci::frame::FrameType::End | capdag::bifaci::frame::FrameType::Err) {
+                            stdout_seq.remove(&capdag::bifaci::frame::FlowKey::from_frame(&frame));
+                        }
+                    }
+                    Ok(None) => {
+                        // No frame available right now, continue
+                    }
+                    Err(e) => {
+                        eprintln!("[Router/main] ERROR reading from masters: {} - Router exiting and closing connections!", e);
+                        eprintln!("[Router/main] THIS IS A BUG - Router should NOT exit while test is running!");
+                        break;
+                    }
                 }
-                eprintln!("[Router/main] Frame written successfully: {:?}", frame.frame_type);
-                if matches!(frame.frame_type, capdag::bifaci::frame::FrameType::End | capdag::bifaci::frame::FrameType::Err) {
-                    stdout_seq.remove(&capdag::bifaci::frame::FlowKey::from_frame(&frame));
-                }
-            }
-            Ok(None) => {
-                // Timeout - no master frame available, that's OK, loop back to check stdin
-            }
-            Err(e) => {
-                eprintln!("[Router/main] ERROR reading from masters: {} - Router exiting and closing connections!", e);
-                eprintln!("[Router/main] THIS IS A BUG - Router should NOT exit while test is running!");
-                break;
             }
         }
     }

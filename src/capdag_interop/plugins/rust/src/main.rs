@@ -8,7 +8,6 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 // Request types
@@ -23,17 +22,17 @@ fn get_req(wet: &mut WetContext) -> Result<Arc<Request>, OpError> {
         .map_err(|e| OpError::ExecutionFailed(e.to_string()))
 }
 
-// Helper: take input and collect all bytes
-fn collect_input_bytes(req: &Request) -> Result<Vec<u8>, OpError> {
+// Helper: take input and collect all bytes (async)
+async fn collect_input_bytes(req: &Request) -> Result<Vec<u8>, OpError> {
     let input = req.take_input()
         .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
-    input.collect_all_bytes()
+    input.collect_all_bytes().await
         .map_err(|e| OpError::ExecutionFailed(format!("Stream error: {}", e)))
 }
 
-// Helper: collect input and parse as JSON
-fn collect_json(req: &Request) -> Result<ValueRequest, OpError> {
-    let bytes = collect_input_bytes(req)?;
+// Helper: collect input and parse as JSON (async)
+async fn collect_json(req: &Request) -> Result<ValueRequest, OpError> {
+    let bytes = collect_input_bytes(req).await?;
     serde_json::from_slice(&bytes)
         .map_err(|e| OpError::ExecutionFailed(format!("Invalid JSON: {}", e)))
 }
@@ -266,10 +265,12 @@ struct EchoOp;
 impl Op<()> for EchoOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let input = req.take_input().map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
-        for stream in input {
-            for chunk in stream.map_err(|e| OpError::ExecutionFailed(e.to_string()))? {
-                emit(req.output(), &chunk.map_err(|e| OpError::ExecutionFailed(e.to_string()))?)?;
+        let mut input = req.take_input().map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
+        while let Some(stream_result) = input.recv().await {
+            let mut stream = stream_result.map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
+            while let Some(chunk_result) = stream.recv().await {
+                let chunk = chunk_result.map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
+                emit(req.output(), &chunk)?;
             }
         }
         Ok(())
@@ -283,10 +284,12 @@ struct BinaryEchoOp;
 impl Op<()> for BinaryEchoOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let input = req.take_input().map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
-        for stream in input {
-            for chunk in stream.map_err(|e| OpError::ExecutionFailed(e.to_string()))? {
-                emit(req.output(), &chunk.map_err(|e| OpError::ExecutionFailed(e.to_string()))?)?;
+        let mut input = req.take_input().map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
+        while let Some(stream_result) = input.recv().await {
+            let mut stream = stream_result.map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
+            while let Some(chunk_result) = stream.recv().await {
+                let chunk = chunk_result.map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
+                emit(req.output(), &chunk)?;
             }
         }
         Ok(())
@@ -301,19 +304,19 @@ impl Op<()> for PeerEchoOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
         eprintln!("[peer_echo] Handler started");
-        let payload = collect_input_bytes(&req)?;
+        let payload = collect_input_bytes(&req).await?;
         eprintln!("[peer_echo] Collected {} bytes, calling peer", payload.len());
 
         let response = req.peer().call_with_bytes(
             "cap:in=media:;out=media:",
             &[("media:customer-message;textable", &payload)],
-        ).map_err(|e| {
+        ).await.map_err(|e| {
             eprintln!("[peer_echo] Peer call failed: {}", e);
             OpError::ExecutionFailed(e.to_string())
         })?;
 
         eprintln!("[peer_echo] Got peer response stream");
-        let value = response.collect_value()
+        let value = response.collect_value().await
             .map_err(|e| OpError::ExecutionFailed(format!("Peer response error: {}", e)))?;
         eprintln!("[peer_echo] Got peer response value: {:?}", value);
         emit(req.output(), &value)
@@ -330,7 +333,7 @@ impl Op<()> for DoubleOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
         eprintln!("[double] Handler starting");
-        let json_req = collect_json(&req)?;
+        let json_req = collect_json(&req).await?;
         let value = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
         eprintln!("[double] Parsed value: {}, doubling to: {}", value, value * 2);
@@ -348,7 +351,7 @@ struct StreamChunksOp;
 impl Op<()> for StreamChunksOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let json_req = collect_json(&req)?;
+        let json_req = collect_json(&req).await?;
         let count = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
         for i in 0..count {
@@ -369,10 +372,10 @@ struct SlowResponseOp;
 impl Op<()> for SlowResponseOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let json_req = collect_json(&req)?;
+        let json_req = collect_json(&req).await?;
         let sleep_ms = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
-        thread::sleep(Duration::from_millis(sleep_ms));
+        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
         let response = format!("slept-{}ms", sleep_ms);
         req.output().write(response.as_bytes())
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
@@ -387,7 +390,7 @@ struct GenerateLargeOp;
 impl Op<()> for GenerateLargeOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let json_req = collect_json(&req)?;
+        let json_req = collect_json(&req).await?;
         let size = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))? as usize;
         let pattern = b"ABCDEFGH";
@@ -406,13 +409,13 @@ struct WithStatusOp;
 impl Op<()> for WithStatusOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let json_req = collect_json(&req)?;
+        let json_req = collect_json(&req).await?;
         let steps = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
         for i in 0..steps {
             let status = format!("step {}", i);
             req.output().log("processing", &status);
-            thread::sleep(Duration::from_millis(10));
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         req.output().write(b"completed")
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
@@ -427,7 +430,7 @@ struct ThrowErrorOp;
 impl Op<()> for ThrowErrorOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let json_req = collect_json(&req)?;
+        let json_req = collect_json(&req).await?;
         let message = json_req.value.as_str()
             .ok_or_else(|| OpError::ExecutionFailed("Expected string".to_string()))?;
         Err(OpError::ExecutionFailed(message.to_string()))
@@ -442,7 +445,7 @@ impl Op<()> for NestedCallOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
         eprintln!("[nested_call] Starting handler");
-        let json_req = collect_json(&req)?;
+        let json_req = collect_json(&req).await?;
         let value = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
         eprintln!("[nested_call] Parsed value: {}", value);
@@ -454,9 +457,9 @@ impl Op<()> for NestedCallOp {
         let response = req.peer().call_with_bytes(
             r#"cap:in="media:order-value;json;textable;record";op=double;out="media:loyalty-points;integer;textable;numeric""#,
             &[("media:order-value;json;textable;record", &double_arg)],
-        ).map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
+        ).await.map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
 
-        let cbor_value = response.collect_value()
+        let cbor_value = response.collect_value().await
             .map_err(|e| OpError::ExecutionFailed(format!("Peer response error: {}", e)))?;
         eprintln!("[nested_call] Peer response: {:?}", cbor_value);
 
@@ -483,16 +486,16 @@ struct HeartbeatStressOp;
 impl Op<()> for HeartbeatStressOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let json_req = collect_json(&req)?;
+        let json_req = collect_json(&req).await?;
         let duration_ms = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
         let chunks = duration_ms / 100;
         let remainder = duration_ms % 100;
         for _ in 0..chunks {
-            thread::sleep(Duration::from_millis(100));
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
         if remainder > 0 {
-            thread::sleep(Duration::from_millis(remainder));
+            tokio::time::sleep(Duration::from_millis(remainder)).await;
         }
         let response = format!("stressed-{}ms", duration_ms);
         req.output().write(response.as_bytes())
@@ -508,15 +511,20 @@ struct ConcurrentStressOp;
 impl Op<()> for ConcurrentStressOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let json_req = collect_json(&req)?;
-        let thread_count = json_req.value.as_u64()
+        let json_req = collect_json(&req).await?;
+        let task_count = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))? as usize;
-        let handles: Vec<_> = (0..thread_count)
-            .map(|i| thread::spawn(move || { thread::sleep(Duration::from_millis(10)); i }))
+        let handles: Vec<_> = (0..task_count)
+            .map(|i| {
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    i
+                })
+            })
             .collect();
         let mut results = Vec::new();
         for handle in handles {
-            results.push(handle.join().unwrap());
+            results.push(handle.await.unwrap());
         }
         let sum: usize = results.iter().sum();
         let response = format!("computed-{}", sum);
@@ -533,7 +541,7 @@ struct GetManifestOp;
 impl Op<()> for GetManifestOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let _ = collect_input_bytes(&req);
+        let _ = collect_input_bytes(&req).await;
         let manifest = build_manifest();
         let manifest_json = serde_json::to_vec(&manifest)
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
@@ -548,7 +556,7 @@ struct ProcessLargeOp;
 impl Op<()> for ProcessLargeOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let payload = collect_input_bytes(&req)?;
+        let payload = collect_input_bytes(&req).await?;
         let mut hasher = Sha256::new();
         hasher.update(&payload);
         let hash = hasher.finalize();
@@ -566,7 +574,7 @@ struct HashIncomingOp;
 impl Op<()> for HashIncomingOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let payload = collect_input_bytes(&req)?;
+        let payload = collect_input_bytes(&req).await?;
         let mut hasher = Sha256::new();
         hasher.update(&payload);
         let hash = hasher.finalize();
@@ -584,7 +592,7 @@ struct VerifyBinaryOp;
 impl Op<()> for VerifyBinaryOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let payload = collect_input_bytes(&req)?;
+        let payload = collect_input_bytes(&req).await?;
         let mut seen = HashSet::new();
         for &byte in &payload {
             seen.insert(byte);
@@ -610,7 +618,7 @@ struct ReadFileInfoOp;
 impl Op<()> for ReadFileInfoOp {
     async fn perform(&self, _dry: &mut DryContext, wet: &mut WetContext) -> OpResult<()> {
         let req = get_req(wet)?;
-        let file_content = collect_input_bytes(&req)?;
+        let file_content = collect_input_bytes(&req).await?;
         let mut hasher = Sha256::new();
         hasher.update(&file_content);
         let hash = hasher.finalize();
@@ -622,7 +630,8 @@ impl Op<()> for ReadFileInfoOp {
     fn metadata(&self) -> OpMetadata { OpMetadata::builder("ReadFileInfoOp").build() }
 }
 
-fn main() -> Result<(), RuntimeError> {
+#[tokio::main]
+async fn main() -> Result<(), RuntimeError> {
     eprintln!("[PLUGIN MAIN] Starting");
     let manifest = build_manifest();
     eprintln!("[PLUGIN MAIN] Built manifest");
@@ -653,7 +662,7 @@ fn main() -> Result<(), RuntimeError> {
     runtime.register_op_type::<ReadFileInfoOp>(r#"cap:in="media:invoice;file-path;textable";op=read_file_info;out="media:invoice-metadata;json;textable;record""#);
 
     eprintln!("[PLUGIN MAIN] Calling runtime.run()");
-    let result = runtime.run();
+    let result = runtime.run().await;
     eprintln!("[PLUGIN MAIN] runtime.run() returned: {:?}", result);
     result
 }
