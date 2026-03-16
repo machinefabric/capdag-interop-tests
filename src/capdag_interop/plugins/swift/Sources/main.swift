@@ -257,7 +257,7 @@ struct PeerEchoOp: Op, Sendable {
         try arg.write(payload)
         try arg.close()
 
-        let response = try call.finish()
+        let response = try call.finish(emitter: req.output(), base: 0.0, weight: 1.0)
         let responseBytes = try response.collectBytes()
         try req.output().write(responseBytes)
     }
@@ -405,7 +405,7 @@ struct NestedCallOp: Op, Sendable {
         try arg.write(inputData)
         try arg.close()
 
-        let response = try call.finish()
+        let response = try call.finish(emitter: req.output(), base: 0.0, weight: 1.0)
         let responseCbor = try response.collectValue()
 
         // Extract integer from response
