@@ -367,7 +367,6 @@ def relay_host_binaries(project_root, request):
 
     binaries = {
         "rust": artifacts / "rust-relay" / "capdag-interop-relay-host-rust",
-        "python": hosts_src / "python" / "relay_host.py",
         "swift": artifacts / "swift-relay" / "capdag-interop-relay-host-swift",
         "go": artifacts / "go-relay" / "capdag-interop-relay-host-go",
     }
