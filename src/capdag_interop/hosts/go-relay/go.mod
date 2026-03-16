@@ -1,11 +1,11 @@
-module github.com/machinafabric/capdag-interop-relay-host-go
+module github.com/machinefabric/capdag-interop-relay-host-go
 
 go 1.21
 
-require github.com/machinafabric/capdag-go v0.0.0
+require github.com/machinefabric/capdag-go v0.0.0
 
 require (
-	github.com/machinafabric/tagged-urn-go v0.0.0 // indirect
+	github.com/machinefabric/tagged-urn-go v0.0.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -14,6 +14,6 @@ require (
 	github.com/xeipuuv/gojsonschema v1.2.0 // indirect
 )
 
-replace github.com/machinafabric/capdag-go => ../../../../../capdag-go
+replace github.com/machinefabric/capdag-go => ../../../../../capdag-go
 
-replace github.com/machinafabric/tagged-urn-go => ../../../../../tagged-urn-go
+replace github.com/machinefabric/tagged-urn-go => ../../../../../tagged-urn-go

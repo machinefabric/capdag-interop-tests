@@ -13,7 +13,7 @@ echo "========================================"
 clear
 
 echo "[test.sh] Setting PYTHON_EXECUTABLE..."
-export PYTHON_EXECUTABLE=/opt/homebrew/Caskroom/miniforge/base/bin/python
+export PYTHON_EXECUTABLE=/opt/homebrew/Caskroom/miniforge/base/envs/machinefabric/bin/python
 
 echo "[test.sh] Starting pytest..."
 echo "[test.sh] Command: python -m pytest -xvs -s --langs $LANGS --clear"

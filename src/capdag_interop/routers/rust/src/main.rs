@@ -9,6 +9,7 @@
 use capdag::bifaci::frame::SeqAssigner;
 use capdag::bifaci::io::{FrameReader, FrameWriter};
 use capdag::bifaci::relay_switch::RelaySwitch;
+use std::sync::Arc;
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::UnixStream;
 
@@ -73,7 +74,8 @@ async fn main() {
 
     // Create RelaySwitch with all host connections
     eprintln!("[Router] Creating RelaySwitch with {} host(s)", sockets.len());
-    let mut switch = RelaySwitch::new(sockets).await.unwrap_or_else(|e| {
+    let cap_registry = Arc::new(capdag::cap::registry::CapRegistry::new_for_test());
+    let mut switch = RelaySwitch::new(sockets, cap_registry).await.unwrap_or_else(|e| {
         eprintln!("Failed to create RelaySwitch: {}", e);
         std::process::exit(1);
     });
@@ -86,15 +88,17 @@ async fn main() {
     {
         let stdout = tokio::io::stdout();
         let mut init_writer = FrameWriter::new(BufWriter::new(stdout));
+        let caps = switch.capabilities().await;
+        let limits = switch.limits().await;
         let notify = capdag::bifaci::frame::Frame::relay_notify(
-            switch.capabilities(),
-            switch.limits(),
+            &caps,
+            &limits,
         );
         init_writer.write(&notify).await.unwrap_or_else(|e| {
             eprintln!("Failed to write initial RelayNotify to engine: {}", e);
             std::process::exit(1);
         });
-        eprintln!("[Router] Sent initial RelayNotify to engine ({} bytes)", switch.capabilities().len());
+        eprintln!("[Router] Sent initial RelayNotify to engine ({} bytes)", caps.len());
     }
 
     // Router is a pure multiplexer - two independent tasks:

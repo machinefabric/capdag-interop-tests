@@ -1,4 +1,4 @@
-#!/opt/homebrew/Caskroom/miniforge/base/bin/python
+#!/opt/homebrew/Caskroom/miniforge/base/envs/machinefabric/bin/python
 """
 Interoperability test plugin (Python)
 
