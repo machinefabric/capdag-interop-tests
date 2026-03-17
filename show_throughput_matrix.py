@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/Caskroom/miniforge/base/envs/machinefabric/bin/python
 """Display throughput matrix from test results.
 
 Reads artifacts/throughput_matrix.json and displays a formatted matrix
