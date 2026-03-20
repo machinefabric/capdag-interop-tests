@@ -257,9 +257,30 @@ struct PeerEchoOp: Op, Sendable {
         try arg.write(payload)
         try arg.close()
 
-        let response = try call.finish(emitter: req.output(), base: 0.0, weight: 1.0)
-        let responseBytes = try response.collectBytes()
-        try req.output().write(responseBytes)
+        let response = try call.finish()
+        let output = req.output()
+        var dataBytes = Data()
+        while let item = response.recv() {
+            switch item {
+            case .data(let result):
+                let value = try result.get()
+                switch value {
+                case .byteString(let bytes): dataBytes.append(contentsOf: bytes)
+                case .utf8String(let str): dataBytes.append(Data(str.utf8))
+                default: dataBytes.append(Data(value.encode()))
+                }
+            case .log(let frame):
+                if let peerProgress = frame.logProgress {
+                    let mapped = mapProgress(peerProgress, base: 0.0, weight: 0.25)
+                    let msg = frame.logMessage ?? ""
+                    output.progress(mapped, message: msg)
+                } else if let msg = frame.logMessage {
+                    let level = frame.logLevel ?? "info"
+                    output.log(level: level, message: msg)
+                }
+            }
+        }
+        try output.write(dataBytes)
     }
     func metadata() -> OpMetadata { OpMetadata.builder("PeerEchoOp").build() }
 }
@@ -405,8 +426,28 @@ struct NestedCallOp: Op, Sendable {
         try arg.write(inputData)
         try arg.close()
 
-        let response = try call.finish(emitter: req.output(), base: 0.0, weight: 1.0)
-        let responseCbor = try response.collectValue()
+        let response = try call.finish()
+        let output = req.output()
+        var dataValue: CBOR? = nil
+        while let item = response.recv() {
+            switch item {
+            case .data(let result):
+                dataValue = try result.get()
+            case .log(let frame):
+                if let peerProgress = frame.logProgress {
+                    let mapped = mapProgress(peerProgress, base: 0.0, weight: 0.25)
+                    let msg = frame.logMessage ?? ""
+                    output.progress(mapped, message: msg)
+                } else if let msg = frame.logMessage {
+                    let level = frame.logLevel ?? "info"
+                    output.log(level: level, message: msg)
+                }
+            }
+        }
+
+        guard let responseCbor = dataValue else {
+            throw PluginRuntimeError.handlerError("No data from peer double")
+        }
 
         // Extract integer from response
         let hostResult: Int

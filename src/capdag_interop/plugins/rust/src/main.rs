@@ -1,8 +1,8 @@
 use capdag::{
     ArgSource, Cap, CapArg, CapManifest, CapOutput, CapUrn, CapUrnBuilder,
-    OutputStream, PluginRuntime, RuntimeError, Request, WET_KEY_REQUEST,
-    Op, OpMetadata, DryContext, WetContext, OpResult, OpError, async_trait,
-    CAP_IDENTITY,
+    map_progress, OutputStream, PeerResponseItem, PluginRuntime, RuntimeError,
+    Request, WET_KEY_REQUEST, Op, OpMetadata, DryContext, WetContext, OpResult,
+    OpError, async_trait, CAP_IDENTITY,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -307,22 +307,38 @@ impl Op<()> for PeerEchoOp {
         let payload = collect_input_bytes(&req).await?;
         eprintln!("[peer_echo] Collected {} bytes, calling peer", payload.len());
 
-        let response = req.peer().call_with_bytes(
+        let mut response = req.peer().call_with_bytes(
             "cap:in=media:;out=media:",
             &[("media:customer-message;textable", &payload)],
-            req.output(),
-            0.0,
-            1.0,
         ).await.map_err(|e| {
             eprintln!("[peer_echo] Peer call failed: {}", e);
             OpError::ExecutionFailed(e.to_string())
         })?;
 
         eprintln!("[peer_echo] Got peer response stream");
-        let value = response.collect_value().await
-            .map_err(|e| OpError::ExecutionFailed(format!("Peer response error: {}", e)))?;
+        let output = req.output();
+        let mut data_value = None;
+        while let Some(item) = response.recv().await {
+            match item {
+                PeerResponseItem::Data(Ok(value)) => { data_value = Some(value); }
+                PeerResponseItem::Data(Err(e)) => {
+                    return Err(OpError::ExecutionFailed(format!("Peer response error: {}", e)));
+                }
+                PeerResponseItem::Log(frame) => {
+                    if let Some(peer_progress) = frame.log_progress() {
+                        let mapped = map_progress(peer_progress, 0.0, 0.25);
+                        let msg = frame.log_message().unwrap_or("");
+                        output.progress(mapped, msg);
+                    } else if let Some(msg) = frame.log_message() {
+                        let level = frame.log_level().unwrap_or("info");
+                        output.log(level, msg);
+                    }
+                }
+            }
+        }
+        let value = data_value.ok_or_else(|| OpError::ExecutionFailed("No data from peer".to_string()))?;
         eprintln!("[peer_echo] Got peer response value: {:?}", value);
-        emit(req.output(), &value)
+        emit(output, &value)
     }
     fn metadata(&self) -> OpMetadata { OpMetadata::builder("PeerEchoOp").build() }
 }
@@ -457,16 +473,32 @@ impl Op<()> for NestedCallOp {
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
 
         eprintln!("[nested_call] Calling peer double");
-        let response = req.peer().call_with_bytes(
+        let mut response = req.peer().call_with_bytes(
             r#"cap:in="media:order-value;json;textable;record";op=double;out="media:loyalty-points;integer;textable;numeric""#,
             &[("media:order-value;json;textable;record", &double_arg)],
-            req.output(),
-            0.0,
-            1.0,
         ).await.map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
 
-        let cbor_value = response.collect_value().await
-            .map_err(|e| OpError::ExecutionFailed(format!("Peer response error: {}", e)))?;
+        let output = req.output();
+        let mut data_value = None;
+        while let Some(item) = response.recv().await {
+            match item {
+                PeerResponseItem::Data(Ok(value)) => { data_value = Some(value); }
+                PeerResponseItem::Data(Err(e)) => {
+                    return Err(OpError::ExecutionFailed(format!("Peer response error: {}", e)));
+                }
+                PeerResponseItem::Log(frame) => {
+                    if let Some(peer_progress) = frame.log_progress() {
+                        let mapped = map_progress(peer_progress, 0.0, 0.25);
+                        let msg = frame.log_message().unwrap_or("");
+                        output.progress(mapped, msg);
+                    } else if let Some(msg) = frame.log_message() {
+                        let level = frame.log_level().unwrap_or("info");
+                        output.log(level, msg);
+                    }
+                }
+            }
+        }
+        let cbor_value = data_value.ok_or_else(|| OpError::ExecutionFailed("No data from peer".to_string()))?;
         eprintln!("[nested_call] Peer response: {:?}", cbor_value);
 
         let host_result = match cbor_value {
