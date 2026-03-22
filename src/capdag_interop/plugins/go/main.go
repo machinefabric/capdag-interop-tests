@@ -67,66 +67,6 @@ reconstruct:
 	}
 }
 
-// collectPeerResponse reads peer response frames and reconstructs the value.
-func collectPeerResponse(peerFrames <-chan bifaci.Frame) (interface{}, error) {
-	var chunks []interface{}
-	for frame := range peerFrames {
-		switch frame.FrameType {
-		case bifaci.FrameTypeChunk:
-			if frame.Payload != nil {
-				var value interface{}
-				if err := cborlib.Unmarshal(frame.Payload, &value); err != nil {
-					return nil, fmt.Errorf("invalid CBOR in CHUNK: %w", err)
-				}
-				chunks = append(chunks, value)
-			}
-		case bifaci.FrameTypeEnd:
-			goto reconstruct
-		case bifaci.FrameTypeErr:
-			code := frame.ErrorCode()
-			message := frame.ErrorMessage()
-			if code == "" {
-				code = "UNKNOWN"
-			}
-			if message == "" {
-				message = "Unknown error"
-			}
-			return nil, fmt.Errorf("[%s] %s", code, message)
-		}
-	}
-
-reconstruct:
-	if len(chunks) == 0 {
-		return nil, fmt.Errorf("no chunks received")
-	} else if len(chunks) == 1 {
-		return chunks[0], nil
-	}
-	switch chunks[0].(type) {
-	case []byte:
-		var result []byte
-		for _, chunk := range chunks {
-			if b, ok := chunk.([]byte); ok {
-				result = append(result, b...)
-			} else {
-				return nil, fmt.Errorf("mixed chunk types")
-			}
-		}
-		return result, nil
-	case string:
-		var result string
-		for _, chunk := range chunks {
-			if s, ok := chunk.(string); ok {
-				result += s
-			} else {
-				return nil, fmt.Errorf("mixed chunk types")
-			}
-		}
-		return result, nil
-	default:
-		return chunks, nil
-	}
-}
-
 // collectInputBytes collects all input frames from the request and returns raw bytes.
 func collectInputBytes(req *bifaci.Request) ([]byte, error) {
 	cborValue := collectPayload(req.Frames())
@@ -406,11 +346,44 @@ func (op *PeerEchoOp) Perform(req *bifaci.Request) error {
 	if err != nil {
 		return fmt.Errorf("peer invoke failed: %w", err)
 	}
-	cborValue, err = collectPeerResponse(peerFrames)
-	if err != nil {
-		return err
+	output := req.Output()
+	var dataValue interface{}
+	var hasData bool
+	for frame := range peerFrames {
+		switch frame.FrameType {
+		case bifaci.FrameTypeLog:
+			if p, ok := frame.LogProgress(); ok {
+				mapped := p * 0.25 // base=0.0, weight=0.25
+				msg := frame.LogMessage()
+				output.Progress(mapped, msg)
+			} else if msg := frame.LogMessage(); msg != "" {
+				level := frame.LogLevel()
+				if level == "" {
+					level = "info"
+				}
+				output.EmitLog(level, msg)
+			}
+		case bifaci.FrameTypeChunk:
+			if frame.Payload != nil {
+				var value interface{}
+				if err := cborlib.Unmarshal(frame.Payload, &value); err != nil {
+					return fmt.Errorf("invalid CBOR in CHUNK: %w", err)
+				}
+				dataValue = value
+				hasData = true
+			}
+		case bifaci.FrameTypeEnd:
+			break
+		case bifaci.FrameTypeErr:
+			code := frame.ErrorCode()
+			message := frame.ErrorMessage()
+			return fmt.Errorf("[%s] %s", code, message)
+		}
 	}
-	return req.Output().EmitCbor(cborValue)
+	if !hasData {
+		return fmt.Errorf("no data from peer")
+	}
+	return output.EmitCbor(dataValue)
 }
 
 // === ACCUMULATING OPS ===
@@ -447,13 +420,16 @@ func (op *StreamChunksOp) Perform(req *bifaci.Request) error {
 	if err := json.Unmarshal(r.Value, &count); err != nil {
 		return fmt.Errorf("expected number: %w", err)
 	}
+	output := req.Output()
 	for i := uint64(0); i < count; i++ {
+		output.Progress(float32(i)/float32(count), "streaming")
 		chunk := fmt.Sprintf("chunk-%d", i)
-		if err := req.Output().EmitCbor([]byte(chunk)); err != nil {
+		if err := output.EmitCbor([]byte(chunk)); err != nil {
 			return err
 		}
 	}
-	return req.Output().EmitCbor([]byte("done"))
+	output.Progress(1.0, "done")
+	return output.EmitCbor([]byte("done"))
 }
 
 type SlowResponseOp struct{}
@@ -467,9 +443,20 @@ func (op *SlowResponseOp) Perform(req *bifaci.Request) error {
 	if err := json.Unmarshal(r.Value, &sleepMs); err != nil {
 		return fmt.Errorf("expected number: %w", err)
 	}
-	time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+	output := req.Output()
+	var elapsed uint64
+	output.Progress(0.0, "waiting")
+	for elapsed < sleepMs {
+		chunk := sleepMs - elapsed
+		if chunk > 100 {
+			chunk = 100
+		}
+		time.Sleep(time.Duration(chunk) * time.Millisecond)
+		elapsed += chunk
+		output.Progress(float32(elapsed)/float32(sleepMs), "waiting")
+	}
 	response := fmt.Sprintf("slept-%dms", sleepMs)
-	return req.Output().EmitCbor([]byte(response))
+	return output.EmitCbor([]byte(response))
 }
 
 type GenerateLargeOp struct{}
@@ -483,12 +470,18 @@ func (op *GenerateLargeOp) Perform(req *bifaci.Request) error {
 	if err := json.Unmarshal(r.Value, &size); err != nil {
 		return fmt.Errorf("expected number: %w", err)
 	}
+	output := req.Output()
 	pattern := []byte("ABCDEFGH")
 	result := make([]byte, size)
+	output.Progress(0.0, "generating")
 	for i := uint64(0); i < size; i++ {
 		result[i] = pattern[i%uint64(len(pattern))]
+		if i%65536 == 0 && size > 0 {
+			output.Progress(float32(i)/float32(size), "generating")
+		}
 	}
-	return req.Output().EmitCbor(result)
+	output.Progress(1.0, "generating")
+	return output.EmitCbor(result)
 }
 
 type WithStatusOp struct{}
@@ -502,12 +495,14 @@ func (op *WithStatusOp) Perform(req *bifaci.Request) error {
 	if err := json.Unmarshal(r.Value, &steps); err != nil {
 		return fmt.Errorf("expected number: %w", err)
 	}
+	output := req.Output()
 	for i := uint64(0); i < steps; i++ {
-		status := fmt.Sprintf("step %d", i)
-		req.Output().EmitLog("processing", status)
+		output.Progress(float32(i)/float32(steps), fmt.Sprintf("step %d", i))
+		output.EmitLog("processing", fmt.Sprintf("step %d", i))
 		time.Sleep(10 * time.Millisecond)
 	}
-	return req.Output().EmitCbor([]byte("completed"))
+	output.Progress(1.0, "completed")
+	return output.EmitCbor([]byte("completed"))
 }
 
 type ThrowErrorOp struct{}
@@ -555,9 +550,42 @@ func (op *NestedCallOp) Perform(req *bifaci.Request) error {
 		return fmt.Errorf("peer invoke failed: %w", err)
 	}
 
-	cborValue, err := collectPeerResponse(peerFrames)
-	if err != nil {
-		return err
+	output := req.Output()
+	var cborValue interface{}
+	var hasData bool
+	for frame := range peerFrames {
+		switch frame.FrameType {
+		case bifaci.FrameTypeLog:
+			if p, ok := frame.LogProgress(); ok {
+				mapped := p * 0.25 // base=0.0, weight=0.25
+				msg := frame.LogMessage()
+				output.Progress(mapped, msg)
+			} else if msg := frame.LogMessage(); msg != "" {
+				level := frame.LogLevel()
+				if level == "" {
+					level = "info"
+				}
+				output.EmitLog(level, msg)
+			}
+		case bifaci.FrameTypeChunk:
+			if frame.Payload != nil {
+				var val interface{}
+				if err := cborlib.Unmarshal(frame.Payload, &val); err != nil {
+					return fmt.Errorf("invalid CBOR in CHUNK: %w", err)
+				}
+				cborValue = val
+				hasData = true
+			}
+		case bifaci.FrameTypeEnd:
+			break
+		case bifaci.FrameTypeErr:
+			code := frame.ErrorCode()
+			message := frame.ErrorMessage()
+			return fmt.Errorf("[%s] %s", code, message)
+		}
+	}
+	if !hasData {
+		return fmt.Errorf("no data from peer double")
 	}
 	fmt.Fprintf(os.Stderr, "[nested_call] Peer response: %v\n", cborValue)
 
@@ -580,7 +608,7 @@ func (op *NestedCallOp) Perform(req *bifaci.Request) error {
 	if err != nil {
 		return err
 	}
-	return req.Output().EmitCbor(finalBytes)
+	return output.EmitCbor(finalBytes)
 }
 
 type HeartbeatStressOp struct{}
@@ -594,13 +622,24 @@ func (op *HeartbeatStressOp) Perform(req *bifaci.Request) error {
 	if err := json.Unmarshal(r.Value, &durationMs); err != nil {
 		return fmt.Errorf("expected number: %w", err)
 	}
+	output := req.Output()
 	chunks := durationMs / 100
+	remainder := durationMs % 100
+	output.Progress(0.0, "heartbeat")
 	for i := uint64(0); i < chunks; i++ {
 		time.Sleep(100 * time.Millisecond)
+		maxChunks := chunks
+		if maxChunks == 0 {
+			maxChunks = 1
+		}
+		output.Progress(float32(i+1)/float32(maxChunks), "heartbeat")
 	}
-	time.Sleep(time.Duration(durationMs%100) * time.Millisecond)
+	if remainder > 0 {
+		time.Sleep(time.Duration(remainder) * time.Millisecond)
+	}
+	output.Progress(1.0, "heartbeat")
 	response := fmt.Sprintf("stressed-%dms", durationMs)
-	return req.Output().EmitCbor([]byte(response))
+	return output.EmitCbor([]byte(response))
 }
 
 type ConcurrentStressOp struct{}
@@ -614,12 +653,15 @@ func (op *ConcurrentStressOp) Perform(req *bifaci.Request) error {
 	if err := json.Unmarshal(r.Value, &workUnits); err != nil {
 		return fmt.Errorf("expected number: %w", err)
 	}
+	output := req.Output()
+	output.Progress(0.0, "starting")
 	var sum uint64
 	for i := uint64(0); i < workUnits*1000; i++ {
 		sum += i
 	}
+	output.Progress(1.0, "done")
 	response := fmt.Sprintf("computed-%d", sum)
-	return req.Output().EmitCbor([]byte(response))
+	return output.EmitCbor([]byte(response))
 }
 
 type GetManifestOp struct{}

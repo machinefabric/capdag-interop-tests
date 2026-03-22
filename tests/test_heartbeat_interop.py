@@ -31,7 +31,7 @@ SUPPORTED_PLUGIN_LANGS = ["rust", "go", "python", "swift"]
 def test_basic_heartbeat(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test heartbeat during 500ms operation: plugin sends heartbeats, host handles locally."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -62,7 +62,7 @@ def test_basic_heartbeat(router_binaries, relay_host_binaries, plugin_binaries, 
 def test_long_operation_heartbeat(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test heartbeat during 2-second operation: verifies no timeout/deadlock."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -93,7 +93,7 @@ def test_long_operation_heartbeat(router_binaries, relay_host_binaries, plugin_b
 def test_status_updates(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test status updates during processing: plugin sends LOG frames, verify response."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

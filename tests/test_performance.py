@@ -35,7 +35,7 @@ SUPPORTED_PLUGIN_LANGS = ["rust", "go", "python", "swift"]
 def test_latency_benchmark(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Benchmark request/response latency: 100 echo iterations, report p50/p95/p99."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -84,7 +84,7 @@ def test_latency_benchmark(router_binaries, relay_host_binaries, plugin_binaries
 def test_throughput_benchmark(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Benchmark throughput: echo requests/second over 2 seconds."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -128,7 +128,7 @@ def test_large_payload_throughput(router_binaries, relay_host_binaries, plugin_b
     """Benchmark large payload transfer: 10MB generated data, report MB/s."""
     try:
         topology = (TestTopology()
-            .machiner(router_binaries[router_lang])
+            .router(router_binaries[router_lang])
             .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
             .build())
 
@@ -192,7 +192,7 @@ def test_large_payload_throughput(router_binaries, relay_host_binaries, plugin_b
 def test_concurrent_stress(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test concurrent workload simulation: plugin processes 100 work units."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

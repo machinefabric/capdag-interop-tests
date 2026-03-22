@@ -45,7 +45,7 @@ SUPPORTED_PLUGIN_LANGS = ["rust", "go", "python", "swift"]
 def test_two_plugin_routing(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Route requests to two instances of the same plugin, verify both respond."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang], plugin_binaries[plugin_lang]])
         .build())
 
@@ -81,7 +81,7 @@ def test_two_plugin_routing(router_binaries, relay_host_binaries, plugin_binarie
 def test_unknown_cap_returns_err(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang):
     """Request for unknown cap must return ERR frame."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries["rust"]])
         .build())
 
@@ -110,7 +110,7 @@ def test_unknown_cap_returns_err(router_binaries, relay_host_binaries, plugin_bi
 def test_concurrent_requests(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Two requests sent before reading any response both complete correctly."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

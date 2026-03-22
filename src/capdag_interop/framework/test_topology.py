@@ -6,7 +6,7 @@ with context manager support.
 
 Example:
     topology = (TestTopology()
-        .machiner(rust_router_bin)
+        .router(rust_router_bin)
         .host("master-a", rust_host_bin, [plugin1, plugin2])
         .host("master-b", swift_host_bin, [plugin3])
         .build())
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from capdag_interop.framework.machiner_process import RouterProcess, HostConfig
+from capdag_interop.framework.router_process import RouterProcess, HostConfig
 
 
 @dataclass
@@ -53,7 +53,7 @@ class TestTopology:
 
     Example:
         topology = (TestTopology()
-            .machiner(rust_router_bin)
+            .router(rust_router_bin)
             .host("master-a", rust_host_bin, [plugin1, plugin2])
             .host("master-b", swift_host_bin, [plugin3])
             .build())
@@ -132,7 +132,7 @@ class TestTopology:
         """
         if self._router_binary is None:
             raise ValueError(
-                "Router binary not specified. Call .machiner(binary_path) before .build()"
+                "Router binary not specified. Call .router(binary_path) before .build()"
             )
 
         if not self._hosts:

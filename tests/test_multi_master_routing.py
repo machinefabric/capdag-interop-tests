@@ -49,7 +49,7 @@ def test_two_masters_distinct_capabilities(router_binaries, relay_host_binaries,
     plugin_lang_1 = get_nth_lang(plugin_binaries, 1)
 
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("master-a", relay_host_binaries[host_lang_0], [plugin_binaries[plugin_lang_0]])
         .host("master-b", relay_host_binaries[host_lang_1], [plugin_binaries[plugin_lang_1]])
         .build())
@@ -115,7 +115,7 @@ def test_three_masters_overlapping_capabilities(router_binaries, relay_host_bina
     plugin_lang_2 = get_nth_lang(plugin_binaries, 2)
 
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("master-1", relay_host_binaries[host_lang_0], [plugin_binaries[plugin_lang_0]])
         .host("master-2", relay_host_binaries[host_lang_1], [plugin_binaries[plugin_lang_1]])
         .host("master-3", relay_host_binaries[host_lang_2], [plugin_binaries[plugin_lang_2]])
@@ -156,7 +156,7 @@ def test_preferred_master_routing_first_match_wins(router_binaries, relay_host_b
     plugin_lang_1 = get_nth_lang(plugin_binaries, 1)
 
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("preferred-master", relay_host_binaries[host_lang_0], [plugin_binaries[plugin_lang_0]])
         .host("fallback-master", relay_host_binaries[host_lang_1], [plugin_binaries[plugin_lang_1]])
         .build())
@@ -197,7 +197,7 @@ def test_capability_segregation(router_binaries, relay_host_binaries, plugin_bin
     plugin_lang = get_nth_lang(plugin_binaries, 0)
 
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("echo-master", relay_host_binaries[host_lang_0], [plugin_binaries[plugin_lang]])
         .host("double-master", relay_host_binaries[host_lang_1], [plugin_binaries[plugin_lang]])
         .build())
@@ -251,7 +251,7 @@ def test_concurrent_requests_across_masters(router_binaries, relay_host_binaries
     plugin_lang_1 = get_nth_lang(plugin_binaries, 1)
 
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("master-a", relay_host_binaries[host_lang_0], [plugin_binaries[plugin_lang_0]])
         .host("master-b", relay_host_binaries[host_lang_1], [plugin_binaries[plugin_lang_1]])
         .build())
@@ -320,7 +320,7 @@ def test_four_masters_mixed_capabilities(router_binaries, relay_host_binaries, p
     plugin_lang_3 = get_nth_lang(plugin_binaries, 3)
 
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("host-0", relay_host_binaries[host_lang_0], [plugin_binaries[plugin_lang_0]])
         .host("host-1", relay_host_binaries[host_lang_1], [plugin_binaries[plugin_lang_1]])
         .host("host-2", relay_host_binaries[host_lang_2], [plugin_binaries[plugin_lang_2]])

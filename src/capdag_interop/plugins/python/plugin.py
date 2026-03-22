@@ -136,40 +136,6 @@ def collect_payload(frames: queue.Queue):
             return chunks
 
 
-def collect_peer_response(peer_frames: queue.Queue):
-    """Collect peer response frames, decode each CHUNK as CBOR, and reconstruct value."""
-    import cbor2
-    chunks = []
-    while True:
-        try:
-            frame = peer_frames.get(timeout=30)
-            if frame.frame_type == FrameType.CHUNK:
-                if frame.payload:
-                    value = cbor2.loads(frame.payload)
-                    chunks.append(value)
-            elif frame.frame_type == FrameType.END:
-                break
-            elif frame.frame_type == FrameType.ERR:
-                code = frame.error_code() or "UNKNOWN"
-                message = frame.error_message() or "Unknown error"
-                raise RuntimeError(f"[{code}] {message}")
-        except queue.Empty:
-            break
-
-    if not chunks:
-        raise RuntimeError("No chunks received")
-    elif len(chunks) == 1:
-        return chunks[0]
-    else:
-        first = chunks[0]
-        if isinstance(first, bytes):
-            return b''.join(c for c in chunks if isinstance(c, bytes))
-        elif isinstance(first, str):
-            return ''.join(c for c in chunks if isinstance(c, str))
-        else:
-            return chunks
-
-
 def build_manifest() -> CapManifest:
     """Build manifest with all test capabilities."""
 
@@ -391,6 +357,7 @@ class BinaryEchoOp(Op):
 
 class PeerEchoOp(Op):
     async def perform(self, dry: DryContext, wet: WetContext) -> None:
+        import cbor2
         req: Request = wet.get_required(WET_KEY_REQUEST)
         print("[peer_echo] Handler started", file=sys.stderr)
         payload = collect_payload(req.take_frames())
@@ -403,9 +370,36 @@ class PeerEchoOp(Op):
         )
 
         print("[peer_echo] Got peer response stream", file=sys.stderr)
-        cbor_value = collect_peer_response(peer_frames)
-        print(f"[peer_echo] Got peer response value: {cbor_value!r}", file=sys.stderr)
-        req.emitter().emit_cbor(cbor_value)
+        emitter = req.emitter()
+        data_value = None
+        while True:
+            try:
+                frame = peer_frames.get(timeout=30)
+                if frame.frame_type == FrameType.LOG:
+                    peer_progress = frame.log_progress()
+                    if peer_progress is not None:
+                        mapped = peer_progress * 0.25  # base=0.0, weight=0.25
+                        msg = frame.log_message() or ""
+                        emitter.progress(mapped, msg)
+                    elif frame.log_message():
+                        level = frame.log_level() or "info"
+                        emitter.emit_log(level, frame.log_message())
+                elif frame.frame_type == FrameType.CHUNK:
+                    if frame.payload:
+                        data_value = cbor2.loads(frame.payload)
+                elif frame.frame_type == FrameType.END:
+                    break
+                elif frame.frame_type == FrameType.ERR:
+                    code = frame.error_code() or "UNKNOWN"
+                    message = frame.error_message() or "Unknown error"
+                    raise RuntimeError(f"[{code}] {message}")
+            except queue.Empty:
+                break
+
+        if data_value is None:
+            raise RuntimeError("No data from peer")
+        print(f"[peer_echo] Got peer response value: {data_value!r}", file=sys.stderr)
+        emitter.emit_cbor(data_value)
 
     def metadata(self) -> OpMetadata:
         return OpMetadata.builder("PeerEchoOp").build()
@@ -435,9 +429,12 @@ class StreamChunksOp(Op):
         payload = collect_payload(req.take_frames())
         data = payload if isinstance(payload, dict) else json.loads(payload)
         count = data["value"]
+        emitter = req.emitter()
         for i in range(count):
-            req.emitter().emit_cbor(f"chunk-{i}".encode('utf-8'))
-        req.emitter().emit_cbor(b"done")
+            emitter.progress(i / count, "streaming")
+            emitter.emit_cbor(f"chunk-{i}".encode('utf-8'))
+        emitter.progress(1.0, "done")
+        emitter.emit_cbor(b"done")
 
     def metadata(self) -> OpMetadata:
         return OpMetadata.builder("StreamChunksOp").build()
@@ -449,8 +446,15 @@ class SlowResponseOp(Op):
         payload = collect_payload(req.take_frames())
         data = payload if isinstance(payload, dict) else json.loads(payload)
         sleep_ms = data["value"]
-        time.sleep(sleep_ms / 1000.0)
-        req.emitter().emit_cbor(f"slept-{sleep_ms}ms".encode('utf-8'))
+        emitter = req.emitter()
+        elapsed = 0
+        emitter.progress(0.0, "waiting")
+        while elapsed < sleep_ms:
+            chunk = min(100, sleep_ms - elapsed)
+            time.sleep(chunk / 1000.0)
+            elapsed += chunk
+            emitter.progress(elapsed / sleep_ms, "waiting")
+        emitter.emit_cbor(f"slept-{sleep_ms}ms".encode('utf-8'))
 
     def metadata(self) -> OpMetadata:
         return OpMetadata.builder("SlowResponseOp").build()
@@ -462,11 +466,16 @@ class GenerateLargeOp(Op):
         payload = collect_payload(req.take_frames())
         data = payload if isinstance(payload, dict) else json.loads(payload)
         size = data["value"]
+        emitter = req.emitter()
         pattern = b"ABCDEFGH"
         result = bytearray()
+        emitter.progress(0.0, "generating")
         for i in range(size):
             result.append(pattern[i % len(pattern)])
-        req.emitter().emit_cbor(bytes(result))
+            if i % 65536 == 0 and size > 0:
+                emitter.progress(i / size, "generating")
+        emitter.progress(1.0, "generating")
+        emitter.emit_cbor(bytes(result))
 
     def metadata(self) -> OpMetadata:
         return OpMetadata.builder("GenerateLargeOp").build()
@@ -478,10 +487,13 @@ class WithStatusOp(Op):
         payload = collect_payload(req.take_frames())
         data = payload if isinstance(payload, dict) else json.loads(payload)
         steps = data["value"]
+        emitter = req.emitter()
         for i in range(steps):
-            req.emitter().emit_log("processing", f"step {i}")
+            emitter.progress(i / steps, f"step {i}")
+            emitter.emit_log("processing", f"step {i}")
             time.sleep(0.01)
-        req.emitter().emit_cbor(b"completed")
+        emitter.progress(1.0, "completed")
+        emitter.emit_cbor(b"completed")
 
     def metadata(self) -> OpMetadata:
         return OpMetadata.builder("WithStatusOp").build()
@@ -501,6 +513,7 @@ class ThrowErrorOp(Op):
 
 class NestedCallOp(Op):
     async def perform(self, dry: DryContext, wet: WetContext) -> None:
+        import cbor2
         req: Request = wet.get_required(WET_KEY_REQUEST)
         print("[nested_call] Starting handler", file=sys.stderr)
         payload = collect_payload(req.take_frames())
@@ -515,7 +528,34 @@ class NestedCallOp(Op):
             [CapArgumentValue("media:json;order-value;record;textable", input_data)],
         )
 
-        cbor_value = collect_peer_response(peer_frames)
+        emitter = req.emitter()
+        cbor_value = None
+        while True:
+            try:
+                frame = peer_frames.get(timeout=30)
+                if frame.frame_type == FrameType.LOG:
+                    peer_progress = frame.log_progress()
+                    if peer_progress is not None:
+                        mapped = peer_progress * 0.25  # base=0.0, weight=0.25
+                        msg = frame.log_message() or ""
+                        emitter.progress(mapped, msg)
+                    elif frame.log_message():
+                        level = frame.log_level() or "info"
+                        emitter.emit_log(level, frame.log_message())
+                elif frame.frame_type == FrameType.CHUNK:
+                    if frame.payload:
+                        cbor_value = cbor2.loads(frame.payload)
+                elif frame.frame_type == FrameType.END:
+                    break
+                elif frame.frame_type == FrameType.ERR:
+                    code = frame.error_code() or "UNKNOWN"
+                    message = frame.error_message() or "Unknown error"
+                    raise RuntimeError(f"[{code}] {message}")
+            except queue.Empty:
+                break
+
+        if cbor_value is None:
+            raise RuntimeError("No data from peer double")
         print(f"[nested_call] Peer response: {cbor_value!r}", file=sys.stderr)
 
         if isinstance(cbor_value, int):
@@ -527,7 +567,7 @@ class NestedCallOp(Op):
 
         final_result = host_result * 2
         print(f"[nested_call] Final result: {final_result}", file=sys.stderr)
-        req.emitter().emit_cbor(final_result)
+        emitter.emit_cbor(final_result)
 
     def metadata(self) -> OpMetadata:
         return OpMetadata.builder("NestedCallOp").build()
@@ -539,11 +579,17 @@ class HeartbeatStressOp(Op):
         payload = collect_payload(req.take_frames())
         data = payload if isinstance(payload, dict) else json.loads(payload)
         duration_ms = data["value"]
+        emitter = req.emitter()
         chunks = duration_ms // 100
-        for _ in range(chunks):
+        remainder = duration_ms % 100
+        emitter.progress(0.0, "heartbeat")
+        for i in range(chunks):
             time.sleep(0.1)
-        time.sleep((duration_ms % 100) / 1000.0)
-        req.emitter().emit_cbor(f"stressed-{duration_ms}ms".encode('utf-8'))
+            emitter.progress((i + 1) / max(chunks, 1), "heartbeat")
+        if remainder > 0:
+            time.sleep(remainder / 1000.0)
+        emitter.progress(1.0, "heartbeat")
+        emitter.emit_cbor(f"stressed-{duration_ms}ms".encode('utf-8'))
 
     def metadata(self) -> OpMetadata:
         return OpMetadata.builder("HeartbeatStressOp").build()
@@ -555,10 +601,13 @@ class ConcurrentStressOp(Op):
         payload = collect_payload(req.take_frames())
         data = payload if isinstance(payload, dict) else json.loads(payload)
         work_units = data["value"]
+        emitter = req.emitter()
+        emitter.progress(0.0, "starting")
         total = 0
         for i in range(work_units * 1000):
             total = (total + i) & 0xFFFFFFFFFFFFFFFF  # Keep in u64 range
-        req.emitter().emit_cbor(f"computed-{total}".encode('utf-8'))
+        emitter.progress(1.0, "done")
+        emitter.emit_cbor(f"computed-{total}".encode('utf-8'))
 
     def metadata(self) -> OpMetadata:
         return OpMetadata.builder("ConcurrentStressOp").build()

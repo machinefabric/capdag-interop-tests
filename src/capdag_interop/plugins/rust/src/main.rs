@@ -373,12 +373,15 @@ impl Op<()> for StreamChunksOp {
         let json_req = collect_json(&req).await?;
         let count = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
+        let output = req.output();
         for i in 0..count {
+            output.progress(i as f32 / count as f32, "streaming");
             let chunk = format!("chunk-{}", i);
-            req.output().write(chunk.as_bytes())
+            output.write(chunk.as_bytes())
                 .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
         }
-        req.output().write(b"done")
+        output.progress(1.0, "done");
+        output.write(b"done")
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
         Ok(())
     }
@@ -394,9 +397,17 @@ impl Op<()> for SlowResponseOp {
         let json_req = collect_json(&req).await?;
         let sleep_ms = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
-        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+        let output = req.output();
+        let mut elapsed: u64 = 0;
+        output.progress(0.0, "waiting");
+        while elapsed < sleep_ms {
+            let chunk = std::cmp::min(100, sleep_ms - elapsed);
+            tokio::time::sleep(Duration::from_millis(chunk)).await;
+            elapsed += chunk;
+            output.progress(elapsed as f32 / sleep_ms as f32, "waiting");
+        }
         let response = format!("slept-{}ms", sleep_ms);
-        req.output().write(response.as_bytes())
+        output.write(response.as_bytes())
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
         Ok(())
     }
@@ -412,12 +423,18 @@ impl Op<()> for GenerateLargeOp {
         let json_req = collect_json(&req).await?;
         let size = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))? as usize;
+        let output = req.output();
         let pattern = b"ABCDEFGH";
         let mut result = Vec::with_capacity(size);
+        output.progress(0.0, "generating");
         for i in 0..size {
             result.push(pattern[i % pattern.len()]);
+            if i % 65536 == 0 && size > 0 {
+                output.progress(i as f32 / size as f32, "generating");
+            }
         }
-        emit(req.output(), &ciborium::Value::Bytes(result))
+        output.progress(1.0, "generating");
+        emit(&output, &ciborium::Value::Bytes(result))
     }
     fn metadata(&self) -> OpMetadata { OpMetadata::builder("GenerateLargeOp").build() }
 }
@@ -431,12 +448,14 @@ impl Op<()> for WithStatusOp {
         let json_req = collect_json(&req).await?;
         let steps = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
+        let output = req.output();
         for i in 0..steps {
-            let status = format!("step {}", i);
-            req.output().log("processing", &status);
+            output.progress(i as f32 / steps as f32, &format!("step {}", i));
+            output.log("processing", &format!("step {}", i));
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        req.output().write(b"completed")
+        output.progress(1.0, "completed");
+        output.write(b"completed")
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
         Ok(())
     }
@@ -527,16 +546,20 @@ impl Op<()> for HeartbeatStressOp {
         let json_req = collect_json(&req).await?;
         let duration_ms = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))?;
+        let output = req.output();
         let chunks = duration_ms / 100;
         let remainder = duration_ms % 100;
-        for _ in 0..chunks {
+        output.progress(0.0, "heartbeat");
+        for i in 0..chunks {
             tokio::time::sleep(Duration::from_millis(100)).await;
+            output.progress((i + 1) as f32 / chunks.max(1) as f32, "heartbeat");
         }
         if remainder > 0 {
             tokio::time::sleep(Duration::from_millis(remainder)).await;
         }
+        output.progress(1.0, "heartbeat");
         let response = format!("stressed-{}ms", duration_ms);
-        req.output().write(response.as_bytes())
+        output.write(response.as_bytes())
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
         Ok(())
     }
@@ -552,6 +575,8 @@ impl Op<()> for ConcurrentStressOp {
         let json_req = collect_json(&req).await?;
         let task_count = json_req.value.as_u64()
             .ok_or_else(|| OpError::ExecutionFailed("Expected number".to_string()))? as usize;
+        let output = req.output();
+        output.progress(0.0, "starting");
         let handles: Vec<_> = (0..task_count)
             .map(|i| {
                 tokio::spawn(async move {
@@ -565,8 +590,9 @@ impl Op<()> for ConcurrentStressOp {
             results.push(handle.await.unwrap());
         }
         let sum: usize = results.iter().sum();
+        output.progress(1.0, "done");
         let response = format!("computed-{}", sum);
-        req.output().write(response.as_bytes())
+        output.write(response.as_bytes())
             .map_err(|e| OpError::ExecutionFailed(e.to_string()))?;
         Ok(())
     }

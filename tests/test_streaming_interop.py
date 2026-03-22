@@ -32,7 +32,7 @@ SUPPORTED_PLUGIN_LANGS = ["rust", "go", "python", "swift"]
 def test_stream_chunks(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test streaming multiple chunks: request N chunks, verify all received in order."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -68,7 +68,7 @@ def test_stream_chunks(router_binaries, relay_host_binaries, plugin_binaries, ro
 def test_large_payload(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test large payload transfer (10MB): request generated data, verify size + pattern."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -119,7 +119,7 @@ def test_large_payload(router_binaries, relay_host_binaries, plugin_binaries, ro
 def test_binary_data(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test binary data integrity: send all 256 byte values repeated, verify roundtrip."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -144,7 +144,7 @@ def test_binary_data(router_binaries, relay_host_binaries, plugin_binaries, rout
 def test_stream_ordering(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test streaming chunk ordering: request 20 chunks, verify sequential order."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

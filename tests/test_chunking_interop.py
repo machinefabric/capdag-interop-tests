@@ -34,7 +34,7 @@ SUPPORTED_PLUGIN_LANGS = ["rust", "go", "python", "swift"]
 def test_large_incoming_payload(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test plugin receiving 1MB payload: host sends large data, plugin returns size + checksum."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -71,7 +71,7 @@ def test_large_incoming_payload(router_binaries, relay_host_binaries, plugin_bin
 def test_massive_incoming_payload(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test plugin receiving 10MB payload with heavy chunking."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -108,7 +108,7 @@ def test_massive_incoming_payload(router_binaries, relay_host_binaries, plugin_b
 def test_binary_incoming(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test plugin receiving binary data with all byte values."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -137,7 +137,7 @@ def test_binary_incoming(router_binaries, relay_host_binaries, plugin_binaries, 
 def test_hash_incoming(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test plugin hashing 5MB incoming payload."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -168,7 +168,7 @@ def test_hash_incoming(router_binaries, relay_host_binaries, plugin_binaries, ro
 def test_multiple_incoming(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test multiple large incoming requests in sequence (3 x 1MB)."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -204,7 +204,7 @@ def test_multiple_incoming(router_binaries, relay_host_binaries, plugin_binaries
 def test_zero_length_incoming(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test plugin receiving empty payload."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

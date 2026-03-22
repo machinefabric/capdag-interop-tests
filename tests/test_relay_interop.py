@@ -46,7 +46,7 @@ def test_relay_initial_notify(router_binaries, relay_host_binaries, plugin_binar
     Verify by sending a request that exercises the advertised capabilities.
     """
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -74,7 +74,7 @@ def test_relay_initial_notify(router_binaries, relay_host_binaries, plugin_binar
 def test_relay_request_passthrough(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """REQ through relay reaches plugin, response comes back through relay."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -106,7 +106,7 @@ def test_relay_state_delivery(router_binaries, relay_host_binaries, plugin_binar
     the relay correctly intercepted the RelayState.
     """
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -139,7 +139,7 @@ def test_relay_state_delivery(router_binaries, relay_host_binaries, plugin_binar
 def test_relay_unknown_cap_returns_err(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang):
     """Request for unknown cap through relay returns ERR frame."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries["rust"]])
         .build())
 
@@ -169,7 +169,7 @@ def test_relay_unknown_cap_returns_err(router_binaries, relay_host_binaries, plu
 def test_relay_mixed_traffic(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """RelayState frames interleaved with requests work correctly."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

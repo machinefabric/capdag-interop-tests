@@ -65,9 +65,9 @@ class RouterProcess:
         if not hosts:
             raise ValueError("At least one host must be provided")
 
-        self.machiner_path = Path(router_binary_path)
+        self.router_path = Path(router_binary_path)
         self.host_configs = hosts
-        self.machiner_proc: Optional[subprocess.Popen] = None
+        self.router_proc: Optional[subprocess.Popen] = None
         self.host_procs: List[subprocess.Popen] = []
         self.socket_paths: List[str] = []
         self.reader: Optional[FrameReader] = None
@@ -149,13 +149,13 @@ class RouterProcess:
 
         # Step 2: Start router with N --connect arguments
         # Router command: <router-binary> --connect <socket1> --connect <socket2> ...
-        router_cmd = [str(self.machiner_path)]
+        router_cmd = [str(self.router_path)]
         for socket_path in self.socket_paths:
             router_cmd.extend(["--connect", socket_path])
 
         print(f"[RouterProcess] Starting router: {' '.join(router_cmd)}", file=sys.stderr)
 
-        self.machiner_proc = subprocess.Popen(
+        self.router_proc = subprocess.Popen(
             router_cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -163,8 +163,8 @@ class RouterProcess:
         )
 
         # Create frame reader/writer for stdin/stdout
-        self.reader = FrameReader(self.machiner_proc.stdout)
-        self.writer = FrameWriter(self.machiner_proc.stdin)
+        self.reader = FrameReader(self.router_proc.stdout)
+        self.writer = FrameWriter(self.router_proc.stdin)
 
         # Step 3: Wait for router's aggregated RelayNotify
         # Router sends ONE RelayNotify with capabilities from ALL hosts
@@ -212,24 +212,24 @@ class RouterProcess:
             timeout: Maximum time in seconds to wait for each process to exit gracefully
         """
         # Stop router first (closes all host connections)
-        if self.machiner_proc:
+        if self.router_proc:
             try:
                 # Close stdin to signal EOF
-                if self.machiner_proc.stdin:
-                    self.machiner_proc.stdin.close()
+                if self.router_proc.stdin:
+                    self.router_proc.stdin.close()
 
                 # Wait for graceful shutdown
-                self.machiner_proc.wait(timeout=timeout)
+                self.router_proc.wait(timeout=timeout)
                 print(f"[RouterProcess] Router stopped gracefully", file=sys.stderr)
             except subprocess.TimeoutExpired:
                 print(f"[RouterProcess] Timeout waiting for router, killing", file=sys.stderr)
-                self.machiner_proc.kill()
-                self.machiner_proc.wait()
+                self.router_proc.kill()
+                self.router_proc.wait()
             except Exception as e:
                 print(f"[RouterProcess] Error stopping router: {e}", file=sys.stderr)
-                if self.machiner_proc.poll() is None:
-                    self.machiner_proc.kill()
-                    self.machiner_proc.wait()
+                if self.router_proc.poll() is None:
+                    self.router_proc.kill()
+                    self.router_proc.wait()
 
         # Stop all relay hosts (should exit when router closes connections)
         for i, host_proc in enumerate(self.host_procs):

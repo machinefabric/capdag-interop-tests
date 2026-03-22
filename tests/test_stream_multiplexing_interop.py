@@ -34,7 +34,7 @@ SUPPORTED_PLUGIN_LANGS = ["rust", "go", "python", "swift"]
 def test_single_stream(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test single stream: STREAM_START + CHUNK + STREAM_END + END roundtrip."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -58,7 +58,7 @@ def test_single_stream(router_binaries, relay_host_binaries, plugin_binaries, ro
 def test_multiple_streams(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test protocol correctly tracks stream state across multiple sequential requests."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -83,7 +83,7 @@ def test_multiple_streams(router_binaries, relay_host_binaries, plugin_binaries,
 def test_empty_stream(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test empty payload through stream multiplexing."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -107,7 +107,7 @@ def test_empty_stream(router_binaries, relay_host_binaries, plugin_binaries, rou
 def test_interleaved_streams(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test binary data integrity through stream multiplexing."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -131,7 +131,7 @@ def test_interleaved_streams(router_binaries, relay_host_binaries, plugin_binari
 def test_stream_error_handling(router_binaries, relay_host_binaries, plugin_binaries, router_lang, host_lang, plugin_lang):
     """Test that stream protocol completes cleanly without errors."""
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

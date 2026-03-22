@@ -43,7 +43,7 @@ def test_plugin_declares_cap_identity(router_binaries, relay_host_binaries, plug
     This test verifies the plugin starts and can handle the identity capability.
     """
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

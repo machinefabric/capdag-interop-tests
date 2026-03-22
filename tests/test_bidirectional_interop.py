@@ -42,7 +42,7 @@ def test_peer_echo(router_binaries, relay_host_binaries, plugin_binaries, router
     Uses 3-tier architecture: Router (RelaySwitch) → Host (PluginHost) → Plugin.
     """
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -73,7 +73,7 @@ def test_nested_call(router_binaries, relay_host_binaries, plugin_binaries, rout
     Uses 3-tier architecture: Router (RelaySwitch) → Host (PluginHost) → Plugin.
     """
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 
@@ -107,7 +107,7 @@ def test_bidirectional_echo_multi(router_binaries, relay_host_binaries, plugin_b
     Uses 3-tier architecture: Router (RelaySwitch) → Host (PluginHost) → Plugin.
     """
     topology = (TestTopology()
-        .machiner(router_binaries[router_lang])
+        .router(router_binaries[router_lang])
         .host("default", relay_host_binaries[host_lang], [plugin_binaries[plugin_lang]])
         .build())
 

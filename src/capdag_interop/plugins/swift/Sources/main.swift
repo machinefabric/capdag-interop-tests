@@ -310,11 +310,14 @@ struct StreamChunksOp: Op, Sendable {
         let json = try parseJSONInput(value)
         let count = json["value"] as! Int
 
+        let output = req.output()
         for i in 0..<count {
+            output.progress(Float(i) / Float(count), message: "streaming")
             let chunk = "chunk-\(i)".data(using: .utf8)!
-            try req.output().emitCbor(CBOR.byteString([UInt8](chunk)))
+            try output.emitCbor(CBOR.byteString([UInt8](chunk)))
         }
-        try req.output().emitCbor(CBOR.byteString([UInt8]("done".data(using: .utf8)!)))
+        output.progress(1.0, message: "done")
+        try output.emitCbor(CBOR.byteString([UInt8]("done".data(using: .utf8)!)))
     }
     func metadata() -> OpMetadata { OpMetadata.builder("StreamChunksOp").build() }
 }
@@ -327,11 +330,17 @@ struct SlowResponseOp: Op, Sendable {
         let value = try firstValue(from: input)
         let json = try parseJSONInput(value)
         let sleepMs = json["value"] as! Int
-
-        try await Task.sleep(nanoseconds: UInt64(sleepMs) * 1_000_000)
-
+        let output = req.output()
+        var elapsed = 0
+        output.progress(0.0, message: "waiting")
+        while elapsed < sleepMs {
+            let chunk = min(100, sleepMs - elapsed)
+            try await Task.sleep(nanoseconds: UInt64(chunk) * 1_000_000)
+            elapsed += chunk
+            output.progress(Float(elapsed) / Float(sleepMs), message: "waiting")
+        }
         let response = "slept-\(sleepMs)ms"
-        try req.output().emitCbor(CBOR.byteString([UInt8](response.data(using: .utf8)!)))
+        try output.emitCbor(CBOR.byteString([UInt8](response.data(using: .utf8)!)))
     }
     func metadata() -> OpMetadata { OpMetadata.builder("SlowResponseOp").build() }
 }
@@ -345,6 +354,7 @@ struct GenerateLargeOp: Op, Sendable {
         let json = try parseJSONInput(value)
         let size = json["value"] as! Int
 
+        let output = req.output()
         // Generate pattern block efficiently (8KB block for fast generation)
         let pattern: [UInt8] = [65, 66, 67, 68, 69, 70, 71, 72] // "ABCDEFGH"
         let blockSize = 8 * 1024 // 8KB block
@@ -358,6 +368,7 @@ struct GenerateLargeOp: Op, Sendable {
         var remaining = size
         var offset = 0
 
+        output.progress(0.0, message: "generating")
         while remaining > 0 {
             let currentChunkSize = min(chunkSize, remaining)
             var chunk = Data(capacity: currentChunkSize)
@@ -370,9 +381,10 @@ struct GenerateLargeOp: Op, Sendable {
                 chunkRemaining -= copySize
             }
 
-            try req.output().write(chunk)
+            try output.write(chunk)
             remaining -= currentChunkSize
             offset += currentChunkSize
+            output.progress(Float(offset) / Float(size), message: "generating")
         }
     }
     func metadata() -> OpMetadata { OpMetadata.builder("GenerateLargeOp").build() }
@@ -387,12 +399,14 @@ struct WithStatusOp: Op, Sendable {
         let json = try parseJSONInput(value)
         let steps = json["value"] as! Int
 
+        let output = req.output()
         for i in 0..<steps {
-            let status = "step \(i)"
-            req.output().log(level: "info", message: "processing: \(status)")
+            output.progress(Float(i) / Float(steps), message: "step \(i)")
+            output.log(level: "info", message: "processing: step \(i)")
             try await Task.sleep(nanoseconds: 10_000_000) // 10ms
         }
-        try req.output().emitCbor(CBOR.byteString([UInt8]("completed".data(using: .utf8)!)))
+        output.progress(1.0, message: "completed")
+        try output.emitCbor(CBOR.byteString([UInt8]("completed".data(using: .utf8)!)))
     }
     func metadata() -> OpMetadata { OpMetadata.builder("WithStatusOp").build() }
 }
@@ -476,11 +490,20 @@ struct HeartbeatStressOp: Op, Sendable {
         let value = try firstValue(from: input)
         let json = try parseJSONInput(value)
         let durationMs = json["value"] as! Int
-
-        try await Task.sleep(nanoseconds: UInt64(durationMs) * 1_000_000)
-
+        let output = req.output()
+        let chunks = durationMs / 100
+        let remainder = durationMs % 100
+        output.progress(0.0, message: "heartbeat")
+        for i in 0..<chunks {
+            try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            output.progress(Float(i + 1) / Float(max(chunks, 1)), message: "heartbeat")
+        }
+        if remainder > 0 {
+            try await Task.sleep(nanoseconds: UInt64(remainder) * 1_000_000)
+        }
+        output.progress(1.0, message: "heartbeat")
         let response = "stressed-\(durationMs)ms"
-        try req.output().emitCbor(CBOR.byteString([UInt8](response.data(using: .utf8)!)))
+        try output.emitCbor(CBOR.byteString([UInt8](response.data(using: .utf8)!)))
     }
     func metadata() -> OpMetadata { OpMetadata.builder("HeartbeatStressOp").build() }
 }
@@ -494,14 +517,17 @@ struct ConcurrentStressOp: Op, Sendable {
         let json = try parseJSONInput(value)
         let workUnits = json["value"] as! Int
 
+        let output = req.output()
+        output.progress(0.0, message: "starting")
         // Simulate concurrent work with arithmetic (matches existing Swift behavior)
         var sum: UInt64 = 0
         for i in 0..<(workUnits * 1000) {
             sum = sum &+ UInt64(i)
         }
+        output.progress(1.0, message: "done")
 
         let response = "computed-\(sum)"
-        try req.output().emitCbor(CBOR.byteString([UInt8](response.data(using: .utf8)!)))
+        try output.emitCbor(CBOR.byteString([UInt8](response.data(using: .utf8)!)))
     }
     func metadata() -> OpMetadata { OpMetadata.builder("ConcurrentStressOp").build() }
 }
